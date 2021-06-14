@@ -20,8 +20,21 @@ class ActiveRecord::Tasks::RedshiftDatabaseTasks < ActiveRecord::Tasks::PostgreS
     end
 
     File.open(filename, 'w+') do |file|
-      ddl_results('admin.v_generate_tbl_ddl').each_row do |row|
+      tbl_ddl_results.each_row do |row|
         file.puts(row)
+      end
+
+      view_ddl_results.each_row do |row|
+        ddl = row[0].split("\n")
+        # Remove --DROP statement
+        lines_to_remove = 1
+
+        if row[0].include?('CREATE MATERIALIZED VIEW')
+          # Hack to remove additional create or replace view added in case its MATERIALIZED VIEW
+          lines_to_remove = 2
+        end
+        ddl = ddl[lines_to_remove..-1]
+        file.puts(ddl + ["\n"])
       end
     end
     File.open(filename, "a") { |f| f << "SET search_path TO #{connection.schema_search_path};\n\n" }
@@ -38,13 +51,23 @@ class ActiveRecord::Tasks::RedshiftDatabaseTasks < ActiveRecord::Tasks::PostgreS
     connection.execute(sql) if sql.present?
   end
 
-  def ddl_results(ddl_tbl)
+  def tbl_ddl_results(ddl_tbl = 'admin.v_generate_tbl_ddl')
     ddl_sql = <<-SQL
         SELECT  ddl
         FROM    #{ddl_tbl}
         WHERE   schemaname = '#{connection.schema_search_path}'
-        AND (ddl NOT ilike '%owner to%' AND ddl NOT ilike '--DROP TABLE%')
+        AND tablename not ilike 'mv_tbl_%' AND  (ddl NOT ilike '%owner to%' AND ddl NOT ilike '--DROP TABLE%')
         ORDER BY tablename ASC, seq ASC
+        SQL
+    connection.execute(ddl_sql)
+  end
+
+  def view_ddl_results(ddl_tbl = 'admin.v_generate_view_ddl')
+    ddl_sql = <<-SQL
+        SELECT  ddl
+        FROM    #{ddl_tbl}
+        WHERE   schemaname = '#{connection.schema_search_path}'
+        ORDER BY viewname ASC
         SQL
     connection.execute(ddl_sql)
   end
